@@ -26,6 +26,10 @@ class DnnModel():
         self.Wc = np.random.normal(0, 0.1, size=(q, n_classes))
         self.bc = np.zeros(n_classes)
 
+        self.accuracies_train = None
+        self.accuracies_test = None
+        self.losses_train = None
+
     def entree_sortie_RBM(self, d: int, H: np.ndarray) -> np.ndarray:
         """
         Calcule l'activation d'une couche d'un RBM. (dir. latente -> visible)
@@ -213,11 +217,19 @@ class DnnModel():
         S = X.copy()
         rng = np.random.default_rng()
         for t in range(self.d):
-            self.train_RBM(t, S, niter, step, batch, verbose=False)
-            Ps = self.sortie_entree_RBM(t, S)  # CHANGE HERE
-            S = rng.binomial(1, Ps, size=(X.shape[0], self.q))
             if verbose:
                 print('Training Layer {}/{} ...'.format(t+1, self.d))
+            self.train_RBM(t, S, niter, step, batch, verbose=False)
+            if verbose:
+                Ph = self.sortie_entree_RBM(t, S)
+                H = rng.binomial(1, Ph, size=Ph.shape)
+                Pv = self.entree_sortie_RBM(t, H)
+                V = rng.binomial(1, Pv, size=Pv.shape)
+                loss = np.sum((V - S)**2) / X.shape[0]
+                print('Reconstruction error (MSE) for layer {} = {}'.format(
+                    t+1, loss))
+            Ps = self.sortie_entree_RBM(t, S)  # CHANGE HERE
+            S = rng.binomial(1, Ps, size=(X.shape[0], self.q))
 
     def generer_image_DBN(self, n_images: int, n_iter: int) -> np.ndarray:
         """
@@ -341,30 +353,72 @@ class DnnModel():
                 self.B[-(d-1), :] -= epsilon * grad_Lb
 
     def train_DNN(
-            self, X: np.ndarray, y: np.ndarray, n_epochs: int, epsilon: float,
-            batch: int, verbose: bool = True) -> None:
+            self, X_train: np.ndarray, y_train: np.ndarray, X_test: np.ndarray,
+            y_test: np.ndarray, n_epochs: int, epsilon: float, batch: int,
+            training_track: bool = False, verbose: bool = True
+            ) -> None:
         """
-        Entraîne le DNN en utilisant la rétro-propagation.
+        Entraîne le réseau de neurones profonds (DNN) en utilisant
+        la rétro-propagation.
 
         Args:
-            X (np.ndarray): Données d'entraînement.
-            y (np.ndarray): Étiquettes de classe correspondantes.
+            X_train (np.ndarray): Données d'entraînement.
+            y_train (np.ndarray): Étiquettes de classe correspondantes pour
+            l'entraînement.
+            X_test (np.ndarray): Données de test.
+            y_test (np.ndarray): Étiquettes de classe correspondantes pour les
+            tests.
             n_epochs (int): Nombre d'époques d'entraînement.
-            epsilon (float): Taux d'apprentissage pour la mise à jour des
+            epsilon (float): Taux d'apprentissage pour les mises à jour des
             poids.
             batch (int): Taille de lot pour l'entraînement par lot.
-            verbose (bool): Afficher ou non les détails de l'entraînement.
+            training_track (bool): Suivre ou non les précisions d'entraînement
+            et de test
+                (par défaut False).
+            verbose (bool): Afficher ou non les détails de l'entraînement (par
+            défaut True).
+
+        Returns:
+            None
+
+        Example:
+            dnn = DnnModel()
+            X_train, y_train, X_test, y_test = load_data()
+            dnn.train_DNN(X_train, y_train, X_test, y_test,
+                n_epochs=50, epsilon=0.01, batch=32, training_track=True)
         """
-        batches_index = self.split_in_batches(np.arange(X.shape[0]), batch)
+        if verbose or training_track:
+            Accuracies_train = []
+            Accuracies_test = []
+            Losses_train = []
+            Y_train = np.eye(self.n_classes)[y_train]
+        batches_index = self.split_in_batches(
+            np.arange(X_train.shape[0]), batch)
         for epoch in range(n_epochs):
             for batch in batches_index:
-                X_batch = X[batch]
-                y_batch = y[batch]
+                X_batch = X_train[batch]
+                y_batch = y_train[batch]
                 self.retropropagation(X_batch, y_batch, epsilon)
-            if verbose:
-                score = np.mean(self.predict(X) == y)
-                print('Epoch {}/{} : Accuracy score = {}'.format(
-                    epoch, n_epochs, score))
+            if verbose or training_track:
+                score_train = self.predict_score(X_train, y_train)
+                score_test = self.predict_score(X_test, y_test)
+                _, probas = self.entree_sortie_reseau(X_train)
+                Y_probas = probas[-1]
+                loss_train = - np.mean(
+                    np.multiply(Y_train, np.log(Y_probas)).sum(axis=1))
+                if verbose:
+                    print(''.join([
+                        'Epoch {}/{} : Accuracy score train',
+                        ' = {} | Accuracy score test = {}']).format(
+                            epoch, n_epochs, score_train, score_test))
+                if training_track:
+                    Accuracies_train.append(score_train)
+                    Accuracies_test.append(score_test)
+                    Losses_train.append(loss_train)
+        if training_track:
+            self.accuracies_train = Accuracies_train
+            self.accuracies_test = Accuracies_test
+            self.losses_train = Losses_train
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         """
