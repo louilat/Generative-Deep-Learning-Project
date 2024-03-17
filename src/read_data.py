@@ -1,3 +1,5 @@
+'''Functions to import and load the data (Binary alpha digits and mnist)'''
+
 import numpy as np
 import scipy
 

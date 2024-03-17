@@ -1,5 +1,5 @@
-'''Class of DNN model with gradient descent algorithm for
-pre training and training'''
+'''Class of DNN Model with gradient descent for pre training and
+Adam algorithm fro training'''
 
 import numpy as np
 
@@ -28,6 +28,24 @@ class DnnModel():
         # Classification
         self.Wc = np.random.normal(0, 0.1, size=(q, n_classes))
         self.bc = np.zeros(n_classes)
+
+        # Moments
+        # self.mom_A = np.zeros((d-1, q))
+        self.mom_B = np.zeros((d-1, q))
+        self.mom_W = np.zeros((d-1, q, q))
+        self.mom_W0 = np.zeros((p, q))
+        self.mom_b0 = np.zeros(q)
+        # Classification
+        self.mom_Wc = np.zeros((q, n_classes))
+        self.mom_bc = np.zeros(n_classes)
+
+        self.v_B = np.zeros((d-1, q))
+        self.v_W = np.zeros((d-1, q, q))
+        self.v_W0 = np.zeros((p, q))
+        self.v_b0 = np.zeros(q)
+        # Classification
+        self.v_Wc = np.zeros((q, n_classes))
+        self.v_bc = np.zeros(n_classes)
 
         self.accuracies_train = None
         self.accuracies_test = None
@@ -308,7 +326,9 @@ class DnnModel():
         return Values, Probas
 
     def retropropagation(
-            self, X: np.ndarray, y: np.ndarray, epsilon: float) -> None:
+            self, X: np.ndarray, y: np.ndarray, t: int, gamma: float = 1e-3,
+            beta1: float = 0.9, beta2: float = 0.999,
+            epsilon: float = 1e-8) -> None:
         """
         Effectue la rétro-propagation à travers le réseau pour
         ajuster les poids.
@@ -332,8 +352,20 @@ class DnnModel():
         grad_LW = 1/N * A1.T @ grad_Lz
         grad_Lb = grad_Lz.mean(axis=0)
         grad_La2 = grad_Lz @ self.Wc.T
-        self.Wc -= epsilon * grad_LW
-        self.bc -= epsilon * grad_Lb
+
+        self.mom_Wc = beta1 * self.mom_Wc + (1 - beta1) * grad_LW
+        self.mom_bc = beta1 * self.mom_bc + (1 - beta1) * grad_Lb
+        self.v_Wc = beta1 * self.v_Wc + (1 - beta2) * grad_LW**2
+        self.v_bc = beta1 * self.v_bc + (1 - beta2) * grad_Lb**2
+        mom_Wc_hat = self.mom_Wc / (1 - beta1**(t+1))
+        mom_bc_hat = self.mom_bc / (1 - beta1**(t+1))
+        v_Wc_hat = self.v_Wc / (1 - beta2**(t+1))
+        v_bc_hat = self.v_bc / (1 - beta2**(t+1))
+
+        # Updates classif layer
+        self.Wc -= gamma * mom_Wc_hat / (np.sqrt(v_Wc_hat) + epsilon)
+        self.bc -= gamma * mom_bc_hat / (np.sqrt(v_bc_hat) + epsilon)
+
         # Backward pass sur le DBN
         # print('Classif trained')
         for d in range(2, self.d + 1):
@@ -347,17 +379,41 @@ class DnnModel():
             grad_Lb = grad_Lz.mean(axis=0)
             grad_La2 = grad_Lz @ self.W[-(d-1), :, :].T
             if d == self.d + 1:
-                self.W0 -= epsilon * grad_LW
-                self.b0 -= epsilon * grad_Lb
+                self.mom_W0 = beta1 * self.mom_W0 + (1 - beta1) * grad_LW
+                self.mom_b0 = beta1 * self.mom_b0 + (1 - beta1) * grad_Lb
+                self.v_W0 = beta1 * self.v_W0 + (1 - beta2) * grad_LW**2
+                self.v_b0 = beta1 * self.v_b0 + (1 - beta2) * grad_Lb**2
+                mom_W0_hat = self.mom_W0 / (1 - beta1**(t+1))
+                mom_b0_hat = self.mom_b0 / (1 - beta1**(t+1))
+                v_W0_hat = self.v_W0 / (1 - beta2**(t+1))
+                v_b0_hat = self.v_b0 / (1 - beta2**(t+1))
+
+                self.W0 -= gamma * mom_W0_hat / (np.sqrt(v_W0_hat) + epsilon)
+                self.b0 -= gamma * mom_b0_hat / (np.sqrt(v_b0_hat) + epsilon)
             else:
-                # print(d)
-                # print('Grad_LW.shape = {}'.format(grad_LW.shape))
-                self.W[-(d-1), :, :] -= epsilon * grad_LW
-                self.B[-(d-1), :] -= epsilon * grad_Lb
+                self.mom_W[-(d-1), :, :] = beta1 * self.mom_W[-(d-1), :, :] + (
+                    1 - beta1) * grad_LW
+                self.mom_B[-(d-1), :] = beta1 * self.mom_B[-(d-1), :] + (
+                    1 - beta1) * grad_Lb
+                self.v_W[-(d-1), :] = beta1 * self.v_W[-(d-1), :] + (
+                    1 - beta2) * grad_LW**2
+                self.v_B[-(d-1), :] = beta1 * self.v_B[-(d-1), :] + (
+                    1 - beta2) * grad_Lb**2
+                mom_W_hat = self.mom_W[-(d-1), :, :] / (1 - beta1**(t+1))
+                mom_b_hat = self.mom_B[-(d-1), :] / (1 - beta1**(t+1))
+                v_W_hat = self.v_W[-(d-1), :] / (1 - beta2**(t+1))
+                v_b_hat = self.v_B[-(d-1), :] / (1 - beta2**(t+1))
+                # Updates RBM layers
+                self.W[-(d-1), :, :] -= gamma * mom_W_hat / (
+                    np.sqrt(v_W_hat) + epsilon)
+                self.B[-(d-1), :] -= gamma * mom_b_hat / (
+                    np.sqrt(v_b_hat) + epsilon)
 
     def train_DNN(
             self, X_train: np.ndarray, y_train: np.ndarray, X_test: np.ndarray,
-            y_test: np.ndarray, n_epochs: int, epsilon: float, batch: int,
+            y_test: np.ndarray, n_epochs: int, gamma: float = 1e-3,
+            beta1: float = 0.9, beta2: float = 0.999, batch: int = 256,
+            epsilon: float = 1e-8,
             training_track: bool = False, verbose: bool = True
             ) -> None:
         """
@@ -401,7 +457,10 @@ class DnnModel():
             for batch in batches_index:
                 X_batch = X_train[batch]
                 y_batch = y_train[batch]
-                self.retropropagation(X_batch, y_batch, epsilon)
+                self.retropropagation(
+                    X=X_batch, y=y_batch, t=epoch,
+                    gamma=gamma, beta1=beta1, beta2=beta2,
+                    epsilon=epsilon)
             if verbose or training_track:
                 score_train = self.predict_score(X_train, y_train)
                 score_test = self.predict_score(X_test, y_test)

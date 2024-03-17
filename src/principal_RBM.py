@@ -1,3 +1,5 @@
+'''Class of RBM model'''
+
 import numpy as np
 
 

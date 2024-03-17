@@ -1,5 +1,4 @@
-'''Class of DNN model with gradient descent algorithm for
-pre training and training'''
+'''Class of DNN model with Adam algorithm for both pretraining and training'''
 
 import numpy as np
 
@@ -28,6 +27,27 @@ class DnnModel():
         # Classification
         self.Wc = np.random.normal(0, 0.1, size=(q, n_classes))
         self.bc = np.zeros(n_classes)
+
+        # Moments
+        self.mom_A = np.zeros((d-1, q))
+        self.mom_B = np.zeros((d-1, q))
+        self.mom_W = np.zeros((d-1, q, q))
+        self.mom_W0 = np.zeros((p, q))
+        self.mom_a0 = np.zeros(p)
+        self.mom_b0 = np.zeros(q)
+        # Classification
+        self.mom_Wc = np.zeros((q, n_classes))
+        self.mom_bc = np.zeros(n_classes)
+
+        self.v_A = np.zeros((d-1, q))
+        self.v_B = np.zeros((d-1, q))
+        self.v_W = np.zeros((d-1, q, q))
+        self.v_a0 = np.zeros(p)
+        self.v_W0 = np.zeros((p, q))
+        self.v_b0 = np.zeros(q)
+        # Classification
+        self.v_Wc = np.zeros((q, n_classes))
+        self.v_bc = np.zeros(n_classes)
 
         self.accuracies_train = None
         self.accuracies_test = None
@@ -150,9 +170,32 @@ class DnnModel():
         Batches.append(indexes[N*batch:len(indexes)])
         return Batches
 
+    def zero_mom(self):
+        # Moments
+        self.mom_A = np.zeros((self.d-1, self.q))
+        self.mom_B = np.zeros((self.d-1, self.q))
+        self.mom_W = np.zeros((self.d-1, self.q, self.q))
+        self.mom_W0 = np.zeros((self.p, self.q))
+        self.mom_a0 = np.zeros(self.p)
+        self.mom_b0 = np.zeros(self.q)
+        # Classification
+        self.mom_Wc = np.zeros((self.q, self.n_classes))
+        self.mom_bc = np.zeros(self.n_classes)
+
+        self.v_A = np.zeros((self.d-1, self.q))
+        self.v_B = np.zeros((self.d-1, self.q))
+        self.v_W = np.zeros((self.d-1, self.q, self.q))
+        self.v_W0 = np.zeros((self.p, self.q))
+        self.v_a0 = np.zeros(self.p)
+        self.v_b0 = np.zeros(self.q)
+        # Classification
+        self.v_Wc = np.zeros((self.q, self.n_classes))
+        self.v_bc = np.zeros(self.n_classes)
+
     def train_RBM(
-        self, t: int, X: np.ndarray, niter: int, step: float,
-            batch: int, verbose: bool = True) -> None:
+            self, t: int, X: np.ndarray, niter: int, gamma: float = 1e-3,
+            beta1: float = 0.9, beta2: float = 0.999, epsilon: float = 1e-8,
+            batch: int = 256, verbose: bool = True) -> None:
         """
         Entraîne une couche RBM du réseau en utilisant la
         rétro-propagation contrastive (CD-k).
@@ -171,6 +214,7 @@ class DnnModel():
         else:
             assert X.shape[1] == self.W0.shape[0], (
                 'Dimention of input incompatible with parameters of RBM')
+        self.zero_mom()
         batches_index = self.split_in_batches(np.arange(X.shape[0]), batch)
         rng = np.random.default_rng()
         for epoch in range(niter):
@@ -192,20 +236,71 @@ class DnnModel():
 
                 # Update the parameters
                 if t != 0:
-                    self.W[t-1, :, :] += step*grad_W
-                    self.A[t-1, :] += step*grad_a
-                    self.B[t-1, :] += step*grad_b
+                    self.mom_W[t-1, :, :] = beta1 * self.mom_W[t-1, :, :] + (
+                        1 - beta1) * grad_W
+                    self.mom_B[t-1, :] = beta1 * self.mom_B[t-1, :] + (
+                        1 - beta1) * grad_b
+                    self.mom_A[t-1, :] = beta1 * self.mom_A[t-1, :] + (
+                        1 - beta1) * grad_a
+                    self.v_W[t-1, :, :] = beta2 * self.v_W[t-1, :, :] + (
+                        1 - beta2) * grad_W**2
+                    self.v_B[t-1, :] = beta2 * self.v_B[t-1, :] + (
+                        1 - beta2) * grad_b**2
+                    self.v_A[t-1, :] = beta2 * self.v_A[t-1, :] + (
+                        1 - beta2) * grad_a**2
+
+                    mom_W_hat = (self.mom_W[t-1, :, :] / (
+                        1 - beta1**(epoch + 1))).astype(np.float64)
+                    mom_A_hat = (self.mom_A[t-1, :] / (
+                        1 - beta1**(epoch + 1))).astype(np.float64)
+                    mom_B_hat = (self.mom_B[t-1, :] / (
+                        1 - beta1**(epoch + 1))).astype(np.float64)
+                    v_W_hat = (self.v_W[t-1, :, :] / (
+                        1 - beta2**(epoch + 1))).astype(np.float64)
+                    v_A_hat = (self.v_A[t-1, :] / (
+                        1 - beta2**(epoch + 1))).astype(np.float64)
+                    v_B_hat = (self.v_B[t-1, :] / (
+                        1 - beta2**(epoch + 1))).astype(np.float64)
+
+                    self.W[t-1, :, :] += gamma * mom_W_hat / (
+                        np.sqrt(v_W_hat) + epsilon)
+                    self.A[t-1, :] += gamma * mom_A_hat / (
+                        np.sqrt(v_A_hat) + epsilon)
+                    self.B[t-1, :] += gamma * mom_B_hat / (
+                        np.sqrt(v_B_hat) + epsilon)
                 else:
-                    self.W0 += step*grad_W
-                    self.a0 += step*grad_a
-                    self.b0 += step*grad_b
+                    self.mom_W0 = beta1 * self.mom_W0 + (1 - beta1) * grad_W
+                    self.mom_b0 = beta1 * self.mom_b0 + (1 - beta1) * grad_b
+                    self.mom_a0 = beta1 * self.mom_a0 + (1 - beta1) * grad_a
+                    self.v_W0 = beta2 * self.v_W0 + (1 - beta2) * grad_W**2
+                    self.v_b0 = beta2 * self.v_b0 + (1 - beta2) * grad_b**2
+                    self.v_a0 = beta2 * self.v_a0 + (1 - beta2) * grad_a**2
+
+                    mom_W0_hat = (self.mom_W0 / (
+                        1 - beta1**(epoch + 1))).astype(np.float64)
+                    mom_a0_hat = (self.mom_a0 / (
+                        1 - beta1**(epoch + 1))).astype(np.float64)
+                    mom_b0_hat = (self.mom_b0 / (
+                        1 - beta1**(epoch + 1))).astype(np.float64)
+                    v_W0_hat = self.v_W0 / (1 - beta2**(epoch + 1))
+                    v_a0_hat = self.v_a0 / (1 - beta2**(epoch + 1))
+                    v_b0_hat = self.v_b0 / (1 - beta2**(epoch + 1))
+
+                    self.W0 += gamma * mom_W0_hat / (
+                        np.sqrt(v_W0_hat) + epsilon)
+                    self.a0 += gamma * mom_a0_hat / (
+                        np.sqrt(v_a0_hat) + epsilon)
+                    self.b0 += gamma * mom_b0_hat / (
+                        np.sqrt(v_b0_hat) + epsilon)
             loss /= X.shape[0]
             if verbose:
                 print("Epoch {}/{} : MSE = {}".format(epoch + 1, niter, loss))
 
     def pretrain_DNN(
-        self, X: np.ndarray, niter: int, step: float, batch: int,
-            verbose: bool = True) -> None:
+        self, X: np.ndarray, niter: int, batch: int,
+        gamma: float = 1e-3, beta1: float = 0.9,
+        beta2: float = 0.999, epsilon: float = 1e-8,
+            verbose: bool = True, full_verbose: bool = False) -> None:
         """
         Pré-entraîne les RBM du DNN en cascade avec les données
         d'entrée spécifiées.
@@ -222,7 +317,10 @@ class DnnModel():
         for t in range(self.d):
             if verbose:
                 print('Training Layer {}/{} ...'.format(t+1, self.d))
-            self.train_RBM(t, S, niter, step, batch, verbose=False)
+            self.train_RBM(
+                t=t, X=S, niter=niter, batch=batch, gamma=gamma,
+                beta1=beta1, beta2=beta2, epsilon=epsilon,
+                verbose=full_verbose)
             if verbose:
                 Ph = self.sortie_entree_RBM(t, S)
                 H = rng.binomial(1, Ph, size=Ph.shape)
@@ -308,7 +406,9 @@ class DnnModel():
         return Values, Probas
 
     def retropropagation(
-            self, X: np.ndarray, y: np.ndarray, epsilon: float) -> None:
+            self, X: np.ndarray, y: np.ndarray, t: int, gamma: float = 1e-3,
+            beta1: float = 0.9, beta2: float = 0.999,
+            epsilon: float = 1e-8) -> None:
         """
         Effectue la rétro-propagation à travers le réseau pour
         ajuster les poids.
@@ -332,8 +432,20 @@ class DnnModel():
         grad_LW = 1/N * A1.T @ grad_Lz
         grad_Lb = grad_Lz.mean(axis=0)
         grad_La2 = grad_Lz @ self.Wc.T
-        self.Wc -= epsilon * grad_LW
-        self.bc -= epsilon * grad_Lb
+
+        self.mom_Wc = beta1 * self.mom_Wc + (1 - beta1) * grad_LW
+        self.mom_bc = beta1 * self.mom_bc + (1 - beta1) * grad_Lb
+        self.v_Wc = beta1 * self.v_Wc + (1 - beta2) * grad_LW**2
+        self.v_bc = beta1 * self.v_bc + (1 - beta2) * grad_Lb**2
+        mom_Wc_hat = self.mom_Wc / (1 - beta1**(t+1))
+        mom_bc_hat = self.mom_bc / (1 - beta1**(t+1))
+        v_Wc_hat = self.v_Wc / (1 - beta2**(t+1))
+        v_bc_hat = self.v_bc / (1 - beta2**(t+1))
+
+        # Updates classif layer
+        self.Wc -= gamma * mom_Wc_hat / (np.sqrt(v_Wc_hat) + epsilon)
+        self.bc -= gamma * mom_bc_hat / (np.sqrt(v_bc_hat) + epsilon)
+
         # Backward pass sur le DBN
         # print('Classif trained')
         for d in range(2, self.d + 1):
@@ -347,17 +459,41 @@ class DnnModel():
             grad_Lb = grad_Lz.mean(axis=0)
             grad_La2 = grad_Lz @ self.W[-(d-1), :, :].T
             if d == self.d + 1:
-                self.W0 -= epsilon * grad_LW
-                self.b0 -= epsilon * grad_Lb
+                self.mom_W0 = beta1 * self.mom_W0 + (1 - beta1) * grad_LW
+                self.mom_b0 = beta1 * self.mom_b0 + (1 - beta1) * grad_Lb
+                self.v_W0 = beta1 * self.v_W0 + (1 - beta2) * grad_LW**2
+                self.v_b0 = beta1 * self.v_b0 + (1 - beta2) * grad_Lb**2
+                mom_W0_hat = self.mom_W0 / (1 - beta1**(t+1))
+                mom_b0_hat = self.mom_b0 / (1 - beta1**(t+1))
+                v_W0_hat = self.v_W0 / (1 - beta2**(t+1))
+                v_b0_hat = self.v_b0 / (1 - beta2**(t+1))
+
+                self.W0 -= gamma * mom_W0_hat / (np.sqrt(v_W0_hat) + epsilon)
+                self.b0 -= gamma * mom_b0_hat / (np.sqrt(v_b0_hat) + epsilon)
             else:
-                # print(d)
-                # print('Grad_LW.shape = {}'.format(grad_LW.shape))
-                self.W[-(d-1), :, :] -= epsilon * grad_LW
-                self.B[-(d-1), :] -= epsilon * grad_Lb
+                self.mom_W[-(d-1), :, :] = beta1 * self.mom_W[-(d-1), :, :] + (
+                    1 - beta1) * grad_LW
+                self.mom_B[-(d-1), :] = beta1 * self.mom_B[-(d-1), :] + (
+                    1 - beta1) * grad_Lb
+                self.v_W[-(d-1), :] = beta1 * self.v_W[-(d-1), :] + (
+                    1 - beta2) * grad_LW**2
+                self.v_B[-(d-1), :] = beta1 * self.v_B[-(d-1), :] + (
+                    1 - beta2) * grad_Lb**2
+                mom_W_hat = self.mom_W[-(d-1), :, :] / (1 - beta1**(t+1))
+                mom_b_hat = self.mom_B[-(d-1), :] / (1 - beta1**(t+1))
+                v_W_hat = self.v_W[-(d-1), :] / (1 - beta2**(t+1))
+                v_b_hat = self.v_B[-(d-1), :] / (1 - beta2**(t+1))
+                # Updates RBM layers
+                self.W[-(d-1), :, :] -= gamma * mom_W_hat / (
+                    np.sqrt(v_W_hat) + epsilon)
+                self.B[-(d-1), :] -= gamma * mom_b_hat / (
+                    np.sqrt(v_b_hat) + epsilon)
 
     def train_DNN(
             self, X_train: np.ndarray, y_train: np.ndarray, X_test: np.ndarray,
-            y_test: np.ndarray, n_epochs: int, epsilon: float, batch: int,
+            y_test: np.ndarray, n_epochs: int, gamma: float = 1e-3,
+            beta1: float = 0.9, beta2: float = 0.999, batch: int = 256,
+            epsilon: float = 1e-8,
             training_track: bool = False, verbose: bool = True
             ) -> None:
         """
@@ -395,13 +531,17 @@ class DnnModel():
             Accuracies_test = []
             Losses_train = []
             Y_train = np.eye(self.n_classes)[y_train]
+        self.zero_mom()
         batches_index = self.split_in_batches(
             np.arange(X_train.shape[0]), batch)
         for epoch in range(n_epochs):
             for batch in batches_index:
                 X_batch = X_train[batch]
                 y_batch = y_train[batch]
-                self.retropropagation(X_batch, y_batch, epsilon)
+                self.retropropagation(
+                    X=X_batch, y=y_batch, t=epoch,
+                    gamma=gamma, beta1=beta1, beta2=beta2,
+                    epsilon=epsilon)
             if verbose or training_track:
                 score_train = self.predict_score(X_train, y_train)
                 score_test = self.predict_score(X_test, y_test)

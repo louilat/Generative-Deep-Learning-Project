@@ -1,3 +1,6 @@
+'''Class of DBN Model with gradient descent optimization for
+pre trainaing and training'''
+
 import numpy as np
 
 
